@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Инструмент визуализации графа зависимостей пакетов
-Этап 2: Сбор данных (исправленная версия)
+Этап 3: Основные операции с графом зависимостей (исправленная версия)
 """
 
 import argparse
@@ -10,11 +10,12 @@ import os
 import json
 import urllib.request
 import urllib.error
+from collections import deque
 
 
 class DependencyVisualizer:
     def __init__(self):
-        self.params = {}
+        self.dependency_graph = {}
 
     def parse_arguments(self):
         """Парсинг аргументов командной строки"""
@@ -119,59 +120,24 @@ class DependencyVisualizer:
         try:
             package_info = self.fetch_package_info_from_npm(package_name)
 
-            print(f"🔍 Анализ структуры пакета '{package_name}':")
-            print(f"   - Получены данные из npm registry")
-
-            # Проверяем основные поля в ответе
-            if 'versions' not in package_info:
-                print("   ❌ Поле 'versions' отсутствует в ответе")
-                return {}
-
             # Получаем последнюю версию
-            latest_version = None
             if 'dist-tags' in package_info and 'latest' in package_info['dist-tags']:
                 latest_version = package_info['dist-tags']['latest']
-                print(f"   ✅ Последняя версия из dist-tags: {latest_version}")
             else:
                 # Если нет latest, берем последнюю версию из versions
                 versions = list(package_info.get('versions', {}).keys())
                 if not versions:
-                    print("   ❌ Версии не найдены")
                     return {}
                 latest_version = sorted(versions)[-1]
-                print(f"   ✅ Последняя версия (из списка версий): {latest_version}")
 
-            # Получаем информацию о версии
+            # Получаем зависимости для последней версии
             version_info = package_info['versions'].get(latest_version, {})
-
-            if not version_info:
-                print(f"   ❌ Информация о версии {latest_version} не найдена")
-                return {}
-
-            print(f"   📋 Поля в информации о версии: {list(version_info.keys())}")
-
-            # Ищем зависимости в различных возможных полях
-            dependencies = {}
-
-            # Основное поле dependencies
-            if 'dependencies' in version_info:
-                dependencies = version_info['dependencies']
-                print(f"   ✅ Найдены зависимости в поле 'dependencies': {len(dependencies)} шт.")
-            else:
-                print("   ❌ Поле 'dependencies' не найдено")
-
-            # Проверяем другие возможные поля с зависимостями
-            dependency_fields = ['peerDependencies', 'devDependencies', 'optionalDependencies']
-            for field in dependency_fields:
-                if field in version_info:
-                    print(f"   📦 Найдены зависимости в поле '{field}': {len(version_info[field])} шт.")
-                    # Для этапа 2 мы фокусируемся только на основных зависимостях
-                    # dependencies.update(version_info[field])  # Раскомментировать если нужны все типы зависимостей
+            dependencies = version_info.get('dependencies', {})
 
             return dependencies
 
         except Exception as e:
-            print(f"   ❌ Ошибка при получении зависимостей: {e}")
+            print(f"   ⚠️ Предупреждение: не удалось получить зависимости для '{package_name}': {e}")
             return {}
 
     def get_dependencies_from_test_file(self, package_name, file_path):
@@ -184,39 +150,25 @@ class DependencyVisualizer:
         except json.JSONDecodeError as e:
             raise Exception(f"Ошибка парсинга JSON файла: {e}")
 
-        print(f"🔍 Анализ тестового файла:")
-        print(f"   - Загружен файл: {file_path}")
-        print(f"   - Тип данных: {type(data)}")
-
         # Ищем информацию о пакете в тестовом файле
         if isinstance(data, dict):
             # Если файл содержит информацию об одном пакете
             if data.get('name') == package_name or 'dependencies' in data:
-                deps = data.get('dependencies', {})
-                print(f"   ✅ Найдены зависимости в структуре одного пакета: {len(deps)} шт.")
-                return deps
+                return data.get('dependencies', {})
             # Если файл содержит информацию о нескольких пакетах
             elif package_name in data:
                 package_data = data[package_name]
                 if isinstance(package_data, dict) and 'dependencies' in package_data:
-                    deps = package_data['dependencies']
-                    print(f"   ✅ Найдены зависимости в структуре нескольких пакетов: {len(deps)} шт.")
-                    return deps
+                    return package_data['dependencies']
                 elif isinstance(package_data, dict):
-                    print(f"   ✅ Найдены прямые зависимости: {len(package_data)} шт.")
                     return package_data
-                else:
-                    print(f"   ❌ Неподдерживаемый формат данных для пакета '{package_name}'")
         elif isinstance(data, list):
             # Если файл содержит список пакетов
             for package in data:
                 if package.get('name') == package_name:
-                    deps = package.get('dependencies', {})
-                    print(f"   ✅ Найдены зависимости в списке пакетов: {len(deps)} шт.")
-                    return deps
+                    return package.get('dependencies', {})
 
-        print(f"   ❌ Пакет '{package_name}' не найден в тестовом файле")
-        raise Exception(f"Пакет '{package_name}' не найден в тестовом файле")
+        return {}
 
     def get_direct_dependencies(self, package_name, repo_url, test_mode=False):
         """Получение прямых зависимостей пакета"""
@@ -225,15 +177,66 @@ class DependencyVisualizer:
         else:
             return self.get_dependencies_from_npm(package_name)
 
-    def print_direct_dependencies(self, package_name, dependencies):
-        """Вывод прямых зависимостей на экран"""
-        if not dependencies:
-            print(f"📭 Пакет '{package_name}' не имеет зависимостей")
+    def should_filter_package(self, package_name, filter_substring):
+        """Проверка, нужно ли фильтровать пакет"""
+        if not filter_substring:
+            return False
+        return filter_substring.lower() in package_name.lower()
+
+    def build_dependency_graph_dfs(self, start_package, repo_url, test_mode=False, filter_substring=""):
+        """Построение графа зависимостей с помощью DFS без рекурсии"""
+        # Стек содержит (текущий_пакет, путь_от_корня)
+        stack = [(start_package, [])]
+        visited = set()
+        graph = {}
+        cycles = []
+
+        while stack:
+            current_package, path = stack.pop()
+
+            # Пропускаем пакеты по фильтру
+            if self.should_filter_package(current_package, filter_substring):
+                print(f"   🚫 Пакет '{current_package}' отфильтрован")
+                graph[current_package] = []
+                continue
+
+            # Если пакет уже в графе, пропускаем получение зависимостей
+            if current_package not in graph:
+                dependencies = self.get_direct_dependencies(current_package, repo_url, test_mode)
+                dependency_names = list(dependencies.keys())
+                graph[current_package] = dependency_names
+                print(f"   📦 {current_package} -> {dependency_names}")
+
+            # Обрабатываем зависимости
+            for dep in reversed(graph[current_package]):
+                # Проверяем циклическую зависимость
+                if dep in path:
+                    cycle_start = path.index(dep)
+                    cycle = path[cycle_start:] + [current_package, dep]
+                    if cycle not in cycles:
+                        cycles.append(cycle)
+                        print(f"   🔁 Обнаружена циклическая зависимость: {' -> '.join(cycle)}")
+                    continue
+
+                # Добавляем в стек для дальнейшего обхода
+                if dep not in visited:
+                    visited.add(dep)
+                    stack.append((dep, path + [current_package]))
+
+        return graph, cycles
+
+    def print_dependency_graph(self, graph, start_package):
+        """Вывод графа зависимостей"""
+        if not graph:
+            print(f"📭 Граф зависимостей для пакета '{start_package}' пуст")
             return
 
-        print(f"📦 Прямые зависимости пакета '{package_name}':")
-        for dep_name, version in dependencies.items():
-            print(f"   - {dep_name}: {version}")
+        print(f"🌳 Полный граф зависимостей для пакета '{start_package}':")
+        for package, dependencies in graph.items():
+            if dependencies:
+                print(f"   {package} -> {dependencies}")
+            else:
+                print(f"   {package} -> (нет зависимостей)")
 
     def run(self):
         """Основной метод запуска приложения"""
@@ -251,20 +254,44 @@ class DependencyVisualizer:
 
             print(f"🎯 Анализ пакета: {args.package}")
             print(f"🔧 Режим: {'тестовый' if args.test_mode else 'реальный'}")
+            if args.filter:
+                print(f"🚫 Фильтр: '{args.filter}'")
             print("=" * 60)
 
-            # Получение прямых зависимостей
-            dependencies = self.get_direct_dependencies(
+            # Построение графа зависимостей с помощью DFS
+            print("🔍 Построение графа зависимостей (DFS без рекурсии):")
+            dependency_graph, cycles = self.build_dependency_graph_dfs(
                 args.package,
                 args.repo,
-                args.test_mode
+                args.test_mode,
+                args.filter
             )
 
             print("=" * 60)
-            # Вывод прямых зависимостей (требование этапа 2)
-            self.print_direct_dependencies(args.package, dependencies)
 
-            print(f"\n✅ Этап 2 успешно завершен.")
+            # Вывод информации о циклических зависимостях
+            if cycles:
+                print(f"⚠️ Обнаружено циклических зависимостей: {len(cycles)}")
+                for i, cycle in enumerate(cycles, 1):
+                    print(f"   {i}. {' -> '.join(cycle)}")
+                print()
+            else:
+                print("✅ Циклические зависимости не обнаружены")
+                print()
+
+            # Вывод полного графа зависимостей
+            self.print_dependency_graph(dependency_graph, args.package)
+
+            # Статистика
+            total_packages = len(dependency_graph)
+            packages_with_deps = sum(1 for deps in dependency_graph.values() if deps)
+
+            print(f"\n📊 Статистика:")
+            print(f"   Всего пакетов в графе: {total_packages}")
+            print(f"   Пакетов с зависимостями: {packages_with_deps}")
+            print(f"   Циклических зависимостей: {len(cycles)}")
+
+            print(f"\n✅ Этап 3 успешно завершен.")
 
         except Exception as e:
             print(f"❌ Ошибка: {e}")
