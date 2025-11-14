@@ -193,7 +193,7 @@ python dependency_visualizer.py --package "A" --repo "test_dir" --test-mode --ou
   - Указанный путь не является файлом: test_dir
 ```
 
-## Этап 2: Сбор данных
+# Этап 2: Сбор данных
 
 ### 1. Использование формата пакетов JavaScript (npm)
 ```python
@@ -1545,3 +1545,4 @@ docker run --rm -v $(pwd):/data minlag/mermaid-cli -i /data/input.mmd -o /data/o
 npx mmdc -i input.mmd -o output.svg
 
 ```
+
