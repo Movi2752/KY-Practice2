@@ -1,4 +1,4 @@
-# Инструмент визуализации графа зависимостей пакетов
+# Инструмент визуализации графа зависимостей пакетов (вариант 15)
 
 ## Общее описание
 
@@ -1543,4 +1543,5 @@ docker run --rm -v $(pwd):/data minlag/mermaid-cli -i /data/input.mmd -o /data/o
 
 # Через локальный mermaid-cli:
 npx mmdc -i input.mmd -o output.svg
+
 ```
