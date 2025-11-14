@@ -1,0 +1,34 @@
+{
+  "APP": {
+    "dependencies": {
+      "UI": "^1.0.0",
+      "API": "^1.0.0"
+    }
+  },
+  "UI": {
+    "dependencies": {
+      "UTILS": "^1.0.0",
+      "THEME": "^1.0.0"
+    }
+  },
+  "API": {
+    "dependencies": {
+      "UTILS": "^1.0.0",
+      "NETWORK": "^1.0.0"
+    }
+  },
+  "UTILS": {
+    "dependencies": {
+      "LOGGER": "^1.0.0"
+    }
+  },
+  "THEME": {
+    "dependencies": {}
+  },
+  "NETWORK": {
+    "dependencies": {}
+  },
+  "LOGGER": {
+    "dependencies": {}
+  }
+}

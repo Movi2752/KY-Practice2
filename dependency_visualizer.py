@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Инструмент визуализации графа зависимостей пакетов
-Этап 3: Основные операции с графом зависимостей (исправленная версия)
+Этап 4: Дополнительные операции с графом зависимостей (исправленная версия)
 """
 
 import argparse
@@ -40,7 +40,7 @@ class DependencyVisualizer:
         parser.add_argument(
             '--test-mode',
             action='store_true',
-            help='Режим работы с тестовым репозиторием'
+            help='Режим работы с тестового репозитория'
         )
 
         parser.add_argument(
@@ -55,6 +55,12 @@ class DependencyVisualizer:
             type=str,
             default='',
             help='Подстрока для фильтрации пакетов'
+        )
+
+        parser.add_argument(
+            '--reverse',
+            action='store_true',
+            help='Режим вывода обратных зависимостей (только для этого этапа)'
         )
 
         return parser.parse_args()
@@ -225,6 +231,98 @@ class DependencyVisualizer:
 
         return graph, cycles
 
+    def find_all_paths_to_target(self, start_package, target_package, repo_url, test_mode=False, filter_substring=""):
+        """Находит все пути от start_package до target_package"""
+        if start_package == target_package:
+            return []
+
+        stack = [(start_package, [start_package])]
+        paths = []
+
+        while stack:
+            current_package, path = stack.pop()
+
+            # Пропускаем пакеты по фильтру
+            if self.should_filter_package(current_package, filter_substring):
+                continue
+
+            # Получаем зависимости текущего пакета
+            dependencies = self.get_direct_dependencies(current_package, repo_url, test_mode)
+            dependency_names = list(dependencies.keys())
+
+            for dep in dependency_names:
+                # Пропускаем по фильтру
+                if self.should_filter_package(dep, filter_substring):
+                    continue
+
+                if dep == target_package:
+                    # Нашли путь к целевому пакету
+                    paths.append(path + [dep])
+                elif dep not in path:  # Избегаем циклов
+                    stack.append((dep, path + [dep]))
+
+        return paths
+
+    def find_reverse_dependencies(self, target_package, repo_url, test_mode=False, filter_substring=""):
+        """Поиск обратных зависимостей с помощью DFS"""
+        print(f"🔍 Поиск обратных зависимостей для пакета '{target_package}':")
+
+        # Сначала строим полный граф из всех пакетов в репозитории
+        if test_mode:
+            # В тестовом режиме получаем все пакеты из файла
+            try:
+                with open(repo_url, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception as e:
+                print(f"❌ Ошибка загрузки тестового файла: {e}")
+                return []
+
+            all_packages = []
+            if isinstance(data, dict):
+                # Если файл содержит несколько пакетов
+                if 'name' in data and 'dependencies' in data:
+                    # Один пакет в файле
+                    all_packages = [data['name']]
+                else:
+                    # Несколько пакетов в файле
+                    all_packages = list(data.keys())
+            elif isinstance(data, list):
+                # Список пакетов
+                all_packages = [pkg.get('name') for pkg in data if pkg.get('name')]
+        else:
+            # В реальном режиме ограничимся известными популярными пакетами для демонстрации
+            print("   ⚠️ В реальном режиме поиск обратных зависимостей ограничен")
+            popular_packages = ["express", "react", "lodash", "axios", "webpack"]
+            all_packages = popular_packages
+
+        reverse_deps = []
+
+        # Для каждого пакета проверяем, зависит ли он от target_package
+        for package in all_packages:
+            if package == target_package:
+                continue
+
+            # Пропускаем по фильтру
+            if self.should_filter_package(package, filter_substring):
+                continue
+
+            # Находим все пути от package до target_package
+            paths = self.find_all_paths_to_target(package, target_package, repo_url, test_mode, filter_substring)
+
+            for path in paths:
+                if len(path) == 2:
+                    # Прямая зависимость
+                    reverse_deps.append((package, "прямая"))
+                    print(f"   ✅ {package} -> {target_package} (прямая зависимость)")
+                else:
+                    # Транзитивная зависимость
+                    intermediate = path[1]  # Первый промежуточный пакет
+                    reverse_deps.append((package, f"транзитивная через {intermediate}"))
+                    path_str = " -> ".join(path)
+                    print(f"   🔄 {path_str} (транзитивная)")
+
+        return reverse_deps
+
     def print_dependency_graph(self, graph, start_package):
         """Вывод графа зависимостей"""
         if not graph:
@@ -237,6 +335,16 @@ class DependencyVisualizer:
                 print(f"   {package} -> {dependencies}")
             else:
                 print(f"   {package} -> (нет зависимостей)")
+
+    def print_reverse_dependencies(self, target_package, reverse_deps):
+        """Вывод обратных зависимостей"""
+        if not reverse_deps:
+            print(f"📭 Пакет '{target_package}' не имеет обратных зависимостей")
+            return
+
+        print(f"🔄 Обратные зависимости пакета '{target_package}':")
+        for package, dep_type in reverse_deps:
+            print(f"   - {package} ({dep_type})")
 
     def run(self):
         """Основной метод запуска приложения"""
@@ -256,42 +364,57 @@ class DependencyVisualizer:
             print(f"🔧 Режим: {'тестовый' if args.test_mode else 'реальный'}")
             if args.filter:
                 print(f"🚫 Фильтр: '{args.filter}'")
+            if args.reverse:
+                print(f"🔄 Режим: обратные зависимости")
             print("=" * 60)
 
-            # Построение графа зависимостей с помощью DFS
-            print("🔍 Построение графа зависимостей (DFS без рекурсии):")
-            dependency_graph, cycles = self.build_dependency_graph_dfs(
-                args.package,
-                args.repo,
-                args.test_mode,
-                args.filter
-            )
+            if args.reverse:
+                # Режим обратных зависимостей (только для этого этапа)
+                reverse_deps = self.find_reverse_dependencies(
+                    args.package,
+                    args.repo,
+                    args.test_mode,
+                    args.filter
+                )
 
-            print("=" * 60)
+                print("=" * 60)
+                self.print_reverse_dependencies(args.package, reverse_deps)
 
-            # Вывод информации о циклических зависимостях
-            if cycles:
-                print(f"⚠️ Обнаружено циклических зависимостей: {len(cycles)}")
-                for i, cycle in enumerate(cycles, 1):
-                    print(f"   {i}. {' -> '.join(cycle)}")
-                print()
             else:
-                print("✅ Циклические зависимости не обнаружены")
-                print()
+                # Обычный режим построения графа зависимостей
+                print("🔍 Построение графа зависимостей (DFS без рекурсии):")
+                dependency_graph, cycles = self.build_dependency_graph_dfs(
+                    args.package,
+                    args.repo,
+                    args.test_mode,
+                    args.filter
+                )
 
-            # Вывод полного графа зависимостей
-            self.print_dependency_graph(dependency_graph, args.package)
+                print("=" * 60)
 
-            # Статистика
-            total_packages = len(dependency_graph)
-            packages_with_deps = sum(1 for deps in dependency_graph.values() if deps)
+                # Вывод информации о циклических зависимостях
+                if cycles:
+                    print(f"⚠️ Обнаружено циклических зависимостей: {len(cycles)}")
+                    for i, cycle in enumerate(cycles, 1):
+                        print(f"   {i}. {' -> '.join(cycle)}")
+                    print()
+                else:
+                    print("✅ Циклические зависимости не обнаружены")
+                    print()
 
-            print(f"\n📊 Статистика:")
-            print(f"   Всего пакетов в графе: {total_packages}")
-            print(f"   Пакетов с зависимостями: {packages_with_deps}")
-            print(f"   Циклических зависимостей: {len(cycles)}")
+                # Вывод полного графа зависимостей
+                self.print_dependency_graph(dependency_graph, args.package)
 
-            print(f"\n✅ Этап 3 успешно завершен.")
+                # Статистика
+                total_packages = len(dependency_graph)
+                packages_with_deps = sum(1 for deps in dependency_graph.values() if deps)
+
+                print(f"\n📊 Статистика:")
+                print(f"   Всего пакетов в графе: {total_packages}")
+                print(f"   Пакетов с зависимостями: {packages_with_deps}")
+                print(f"   Циклических зависимостей: {len(cycles)}")
+
+            print(f"\n✅ Этап 4 успешно завершен.")
 
         except Exception as e:
             print(f"❌ Ошибка: {e}")
