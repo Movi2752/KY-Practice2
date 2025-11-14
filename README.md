@@ -1,166 +1,223 @@
-## Этап 1
+## Этап 2: Сбор данных
 
-### 1. Источник параметров - опции командной строки
+### 1. Использование формата пакетов JavaScript (npm)
 ```python
-def parse_arguments(self):
-    """Парсинг аргументов командной строки"""
-    parser = argparse.ArgumentParser(
-        description='Инструмент визуализации графа зависимостей пакетов'
-    )
+def fetch_package_info_from_npm(self, package_name):
+    """Получение информации о пакете из npm реестра"""
+    url = f"https://registry.npmjs.org/{package_name}"
     
-    parser.add_argument('--package', type=str, required=True, help='Имя анализируемого пакета')
-    parser.add_argument('--repo', type=str, required=True, help='URL-адрес репозитория или путь к файлу тестового репозитория')
-    parser.add_argument('--test-mode', action='store_true', help='Режим работы с тестовым репозиторием')
-    parser.add_argument('--output', type=str, default='dependency_graph.svg', help='Имя сгенерированного файла с изображением графа')
-    parser.add_argument('--filter', type=str, default='', help='Подстрока для фильтрации пакетов')
-    
-    return parser.parse_args()
+    try:
+        with urllib.request.urlopen(url) as response:
+            data = json.loads(response.read().decode())
+            return data
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise Exception(f"Пакет '{package_name}' не найден в npm реестре")
+        else:
+            raise Exception(f"Ошибка при запросе к npm реестру: {e}")
+    except urllib.error.URLError as e:
+        raise Exception(f"Ошибка сети: {e}")
+    except json.JSONDecodeError as e:
+        raise Exception(f"Ошибка парсинга JSON ответа: {e}")
 ```
 
-### 2. Все требуемые параметры присутствуют
-- `--package` - имя анализируемого пакета
-- `--repo` - URL или путь к файлу
-- `--test-mode` - режим тестового репозитория
-- `--output` - имя файла с изображением
-- `--filter` - подстрока для фильтрации
-
-### 3. Вывод параметров в формате ключ-значение
+### 2. Извлечение информации о прямых зависимостях из репозитория
 ```python
-def print_parameters(self, args):
-    """Вывод параметров в формате ключ-значение"""
-    print("=== Параметры конфигурации ===")
-    print(f"package: {args.package}")
-    print(f"repo: {args.repo}")
-    print(f"test-mode: {args.test_mode}")
-    print(f"output: {args.output}")
-    print(f"filter: {args.filter}")
-    print("===============================")
-```
-
-### 4. Обработка ошибок для всех параметров
-```python
-def validate_arguments(self, args):
-    """Валидация аргументов командной строки"""
-    errors = []
-    
-    # Проверка имени пакета
-    if not args.package or not args.package.strip():
-        errors.append("Имя пакета не может быть пустым")
-        
-    # Проверка репозитория
-    if not args.repo or not args.repo.strip():
-        errors.append("Репозиторий не может быть пустым")
-    elif args.test_mode:
-        # В тестовом режиме проверяем существование файла
-        if not os.path.exists(args.repo):
-            errors.append(f"Файл репозитория не существует: {args.repo}")
-        elif not os.path.isfile(args.repo):
-            errors.append(f"Указанный путь не является файлом: {args.repo}")
-    
-    # Проверка выходного файла
-    if not args.output or not args.output.strip():
-        errors.append("Имя выходного файла не может быть пустым")
+def get_direct_dependencies(self, package_name, repo_url, test_mode=False):
+    """Получение прямых зависимостей пакета"""
+    if test_mode:
+        return self.get_dependencies_from_test_file(package_name, repo_url)
     else:
-        valid_extensions = ['.svg', '.png', '.jpg', '.jpeg']
-        if not any(args.output.lower().endswith(ext) for ext in valid_extensions):
-            errors.append(f"Неподдерживаемый формат файла. Допустимые: {', '.join(valid_extensions)}")
+        return self.get_dependencies_from_npm(package_name)
+
+def get_dependencies_from_test_file(self, package_name, file_path):
+    """Получение зависимостей из тестового файла"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise Exception(f"Файл '{file_path}' не найден")
+    except json.JSONDecodeError as e:
+        raise Exception(f"Ошибка парсинга JSON файла: {e}")
     
-    return errors
+    # Ищем информацию о пакете в тестовом файле
+    if isinstance(data, dict):
+        # Если файл содержит информацию об одном пакете
+        if data.get('name') == package_name or 'dependencies' in data:
+            return data.get('dependencies', {})
+        # Если файл содержит информацию о нескольких пакетах
+        elif package_name in data:
+            package_data = data[package_name]
+            if isinstance(package_data, dict) and 'dependencies' in package_data:
+                return package_data['dependencies']
+            elif isinstance(package_data, dict):
+                return package_data
+    elif isinstance(data, list):
+        # Если файл содержит список пакетов
+        for package in data:
+            if package.get('name') == package_name:
+                return package.get('dependencies', {})
+    
+    raise Exception(f"Пакет '{package_name}' не найден в тестовом файле")
 ```
+
+### 3. Вывод прямых зависимостей на экран (только для этого этапа)
+```python
+def print_direct_dependencies(self, package_name, dependencies):
+    """Вывод прямых зависимостей на экран"""
+    if not dependencies:
+        print(f"Пакет '{package_name}' не имеет зависимостей")
+        return
+    
+    print(f"Прямые зависимости пакета '{package_name}':")
+    for dep_name, version in dependencies.items():
+        print(f"  - {dep_name}: {version}")
+```
+
+### 4. Запрет на использование менеджеров пакетов и сторонних библиотек
+- Используются только стандартные библиотеки Python: `urllib.request`, `json`
+- Не используются npm, yarn или другие менеджеры пакетов
+- Не используются сторонние библиотеки для HTTP-запросов
 
 ## Демонстрация выполнения требований
 
-Создам тестовый файл для демонстрации:
+### Тест 1: Реальный режим - Express (работает)
 ```bash
-echo '{"A": {"dependencies": {"B": "^1.0.0", "C": "^2.0.0"}}}' > test_repo.json
-```
-
-### Тест 1: Успешный запуск с валидными параметрами
-```bash
-python dependency_visualizer.py --package "react" --repo "https://registry.npmjs.org" --output "graph.svg" --filter "test"
+python dependency_visualizer.py --package "express" --repo "https://registry.npmjs.org" --output "graph.svg"
 ```
 
 **Ожидаемый вывод:**
 ```
-=== Параметры конфигурации ===
-package: react
-repo: https://registry.npmjs.org
-test-mode: False
-output: graph.svg
-filter: test
-===============================
-Этап 1 успешно завершен. Параметры валидны.
+🎯 Анализ пакета: express
+🔧 Режим: реальный
+============================================================
+🔍 Анализ структуры пакета 'express':
+   - Получены данные из npm registry
+   ✅ Последняя версия из dist-tags: 5.1.0
+   📋 Поля в информации о версии: ['name', 'version', 'keywords', 'author', 'license', '_id', 'maintainers', 'contributors', 'homepage', 'bugs', 'dist', 'engines', 'funding', 'gitHead', 'scripts', '_npmUser', 'repository', '_npmVersion', 'description', 'directories', '_nodeVersion', 'dependencies', '_hasShrinkwrap', 'devDependencies', '_npmOperationalInternal']
+   ✅ Найдены зависимости в поле 'dependencies': 27 шт.
+   📦 Найдены зависимости в поле 'devDependencies': 16 шт.
+============================================================
+📦 Прямые зависимости пакета 'express':
+   - qs: ^6.14.0
+   - etag: ^1.8.1
+   - once: ^1.4.0
+   - send: ^1.1.0
+   - vary: ^1.1.2
+   - debug: ^4.4.0
+   - fresh: ^2.0.0
+   - cookie: ^0.7.1
+   - router: ^2.2.0
+   - accepts: ^2.0.0
+   - type-is: ^2.0.1
+   - parseurl: ^1.3.3
+   - statuses: ^2.0.1
+   - encodeurl: ^2.0.0
+   - mime-types: ^3.0.0
+   - proxy-addr: ^2.0.7
+   - body-parser: ^2.2.0
+   - escape-html: ^1.0.3
+   - http-errors: ^2.0.0
+   - on-finished: ^2.4.1
+   - content-type: ^1.0.5
+   - finalhandler: ^2.1.0
+   - range-parser: ^1.2.1
+   - serve-static: ^2.2.0
+   - cookie-signature: ^1.2.1
+   - merge-descriptors: ^2.0.0
+   - content-disposition: ^1.0.0
+
+✅ Этап 2 успешно завершен.
 ```
 
-### Тест 2: Успешный запуск в тестовом режиме
+### Тест 2: Тестовый режим - простой JSON файл
 ```bash
-python dependency_visualizer.py --package "A" --repo "test_repo.json" --test-mode --output "graph.svg" --filter "dev"
+python dependency_visualizer.py --package "A" --repo "test_repo_simple.json" --test-mode --output "graph.svg"
 ```
 
 **Ожидаемый вывод:**
 ```
-=== Параметры конфигурации ===
-package: A
-repo: test_repo.json
-test-mode: True
-output: graph.svg
-filter: dev
-===============================
-Этап 1 успешно завершен. Параметры валидны.
+🎯 Анализ пакета: A
+🔧 Режим: тестовый
+============================================================
+🔍 Анализ тестового файла:
+   - Загружен файл: test_repo_simple.json
+   - Тип данных: <class 'dict'>
+   ✅ Найдены зависимости в структуре одного пакета: 3 шт.
+============================================================
+📦 Прямые зависимости пакета 'A':
+   - B: ^1.0.0
+   - C: ^2.0.0
+   - D: ^3.0.0
+
+✅ Этап 2 успешно завершен.
 ```
 
-### Тест 3: Ошибка - пустое имя пакета
+### Тест 3: Тестовый режим - сложная структура с несколькими пакетами
 ```bash
-python dependency_visualizer.py --package "" --repo "https://registry.npmjs.org" --output "graph.svg"
+python dependency_visualizer.py --package "A" --repo "test_repo_complex.json" --test-mode --output "graph.svg"
 ```
 
 **Ожидаемый вывод:**
 ```
-Ошибки валидации:
-  - Имя пакета не может быть пустым
+🎯 Анализ пакета: A
+🔧 Режим: тестовый
+============================================================
+🔍 Анализ тестового файла:
+   - Загружен файл: test_repo_complex.json
+   - Тип данных: <class 'dict'>
+   ✅ Найдены зависимости в структуре нескольких пакетов: 2 шт.
+============================================================
+📦 Прямые зависимости пакета 'A':
+   - B: ^1.0.0
+   - C: ^2.0.0
+
+✅ Этап 2 успешно завершен.
 ```
 
-### Тест 4: Ошибка - пустой репозиторий
+### Тест 4: Тестовый режим - пакет без зависимостей
 ```bash
-python dependency_visualizer.py --package "react" --repo "" --output "graph.svg"
+python dependency_visualizer.py --package "simple-package" --repo "test_repo_no_deps.json" --test-mode --output "graph.svg"
 ```
 
 **Ожидаемый вывод:**
 ```
-Ошибки валидации:
-  - Репозиторий не может быть пустым
+🎯 Анализ пакета: simple-package
+🔧 Режим: тестовый
+============================================================
+🔍 Анализ тестового файла:
+   - Загружен файл: test_repo_no_deps.json
+   - Тип данных: <class 'dict'>
+   ✅ Найдены зависимости в структуре одного пакета: 0 шт.
+============================================================
+📭 Пакет 'simple-package' не имеет зависимостей
+
+✅ Этап 2 успешно завершен.
 ```
 
-### Тест 5: Ошибка - файл не существует в тестовом режиме
+### Тест 5: Ошибка - невалидный JSON файл
 ```bash
-python dependency_visualizer.py --package "A" --repo "nonexistent.json" --test-mode --output "graph.svg"
+python dependency_visualizer.py --package "A" --repo "test_repo_invalid.json" --test-mode --output "graph.svg"
 ```
 
 **Ожидаемый вывод:**
 ```
-Ошибки валидации:
-  - Файл репозитория не существует: nonexistent.json
+❌ Ошибка: Ошибка парсинга JSON файла: Expecting ',' delimiter: line 5 column 1 (char 52)
 ```
 
-### Тест 6: Ошибка - неподдерживаемый формат файла
+### Тест 6: Ошибка - пакет не найден в тестовом файле
 ```bash
-python dependency_visualizer.py --package "react" --repo "https://registry.npmjs.org" --output "graph.txt"
+python dependency_visualizer.py --package "Z" --repo "test_repo_complex.json" --test-mode --output "graph.svg"
 ```
 
 **Ожидаемый вывод:**
 ```
-Ошибки валидации:
-  - Неподдерживаемый формат файла. Допустимые: .svg, .png, .jpg, .jpeg
-```
-
-### Тест 7: Ошибка - путь не является файлом в тестовом режиме
-```bash
-mkdir test_dir
-python dependency_visualizer.py --package "A" --repo "test_dir" --test-mode --output "graph.svg"
-```
-
-**Ожидаемый вывод:**
-```
-Ошибки валидации:
-  - Указанный путь не является файлом: test_dir
+🎯 Анализ пакета: Z
+🔧 Режим: тестовый
+============================================================
+🔍 Анализ тестового файла:
+   - Загружен файл: test_repo_complex.json
+   - Тип данных: <class 'dict'>
+   ❌ Пакет 'Z' не найден в тестовом файле
+❌ Ошибка: Пакет 'Z' не найден в тестовом файле
 ```
