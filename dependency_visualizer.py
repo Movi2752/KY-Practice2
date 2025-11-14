@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Инструмент визуализации графа зависимостей пакетов
-Этап 4: Дополнительные операции с графом зависимостей (исправленная версия)
+Этап 5: Визуализация графа зависимостей (исправленная версия)
 """
 
 import argparse
@@ -11,6 +11,8 @@ import json
 import urllib.request
 import urllib.error
 from collections import deque
+import subprocess
+import tempfile
 
 
 class DependencyVisualizer:
@@ -60,7 +62,7 @@ class DependencyVisualizer:
         parser.add_argument(
             '--reverse',
             action='store_true',
-            help='Режим вывода обратных зависимостей (только для этого этапа)'
+            help='Режим вывода обратных зависимостей'
         )
 
         return parser.parse_args()
@@ -111,7 +113,7 @@ class DependencyVisualizer:
                 return data
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                raise Exception(f"Пакет '{package_name}' не найден в npm реестре")
+                raise Exception(f"Пакет '{package_name}' не найден в npm реестру")
             else:
                 raise Exception(f"Ошибка HTTP {e.code} при запросе к npm реестру: {e}")
         except urllib.error.URLError as e:
@@ -323,6 +325,166 @@ class DependencyVisualizer:
 
         return reverse_deps
 
+    def generate_mermaid_diagram(self, graph, start_package):
+        """Генерация текстового представления графа на языке Mermaid"""
+        mermaid_code = "%% Дерево зависимостей для пакета " + start_package + "\n"
+        mermaid_code += "graph TD\n"
+
+        # Добавляем стартовый пакет с особым стилем
+        mermaid_code += f"    {start_package.replace('-', '_')}[{start_package}]:::root\n"
+
+        # Добавляем все зависимости
+        edges = set()
+        nodes = set([start_package.replace('-', '_')])
+
+        for package, dependencies in graph.items():
+            package_id = package.replace('-', '_')
+            nodes.add(package_id)
+
+            for dep in dependencies:
+                if dep in graph:  # Добавляем только если зависимость есть в графе
+                    dep_id = dep.replace('-', '_')
+                    nodes.add(dep_id)
+                    edge = f"    {package_id} --> {dep_id}\n"
+                    if edge not in edges:
+                        mermaid_code += edge
+                        edges.add(edge)
+
+        # Добавляем стили
+        mermaid_code += "    \n"
+        mermaid_code += "    classDef root fill:#e1f5fe,stroke:#01579b,stroke-width:2px\n"
+        mermaid_code += "    classDef leaf fill:#f3e5f5,stroke:#4a148c,stroke-width:1px\n"
+        mermaid_code += "    classDef node fill:#e8f5e8,stroke:#1b5e20,stroke-width:1px\n"
+
+        # Применяем стили к листовым узлам (без зависимостей)
+        for package, dependencies in graph.items():
+            package_id = package.replace('-', '_')
+            if not dependencies:
+                mermaid_code += f"    class {package_id} leaf\n"
+            elif package != start_package:
+                mermaid_code += f"    class {package_id} node\n"
+
+        return mermaid_code
+
+    def save_svg_from_mermaid(self, mermaid_code, output_file):
+        """Сохранение SVG из Mermaid кода"""
+        try:
+            # Создаем временный файл с Mermaid кодом
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.mmd', delete=False, encoding='utf-8') as f:
+                f.write(mermaid_code)
+                mermaid_file = f.name
+
+            print(f"📁 Создан временный файл: {mermaid_file}")
+
+            # Пробуем разные способы генерации SVG
+
+            # Способ 1: Docker mermaid-cli
+            try:
+                print("🚀 Попытка генерации через Docker mermaid-cli...")
+                result = subprocess.run([
+                    'docker', 'run', '--rm', '-v', f'{os.path.dirname(mermaid_file)}:/data',
+                    'minlag/mermaid-cli', '-i', f'/data/{os.path.basename(mermaid_file)}',
+                    '-o', f'/data/{os.path.basename(output_file)}',
+                    '--backgroundColor', 'white'
+                ], capture_output=True, text=True, timeout=60)
+
+                if result.returncode == 0:
+                    # Копируем сгенерированный файл из временной директории
+                    temp_svg = os.path.join(os.path.dirname(mermaid_file), os.path.basename(output_file))
+                    if os.path.exists(temp_svg):
+                        import shutil
+                        shutil.copy(temp_svg, output_file)
+                        print(f"✅ SVG файл успешно создан: {output_file}")
+                        os.unlink(mermaid_file)
+                        return True
+                else:
+                    print(f"❌ Ошибка Docker: {result.stderr}")
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                print(f"❌ Docker не доступен: {e}")
+
+            # Способ 2: Локальный mermaid-cli
+            try:
+                print("🚀 Попытка генерации через локальный mermaid-cli...")
+                result = subprocess.run([
+                    'npx', '-p', '@mermaid-js/mermaid-cli', 'mmdc',
+                    '-i', mermaid_file, '-o', output_file,
+                    '--backgroundColor', 'white'
+                ], capture_output=True, text=True, timeout=60)
+
+                if result.returncode == 0:
+                    print(f"✅ SVG файл успешно создан: {output_file}")
+                    os.unlink(mermaid_file)
+                    return True
+                else:
+                    print(f"❌ Ошибка mermaid-cli: {result.stderr}")
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                print(f"❌ mermaid-cli не доступен: {e}")
+
+            # Способ 3: Сохраняем только Mermaid код
+            print("💡 Генерация SVG не удалась, сохраняю Mermaid код...")
+            mermaid_output = output_file.replace('.svg', '.mmd')
+            with open(mermaid_output, 'w', encoding='utf-8') as f:
+                f.write(mermaid_code)
+            print(f"✅ Mermaid код сохранен в: {mermaid_output}")
+            print("📋 Инструкции для ручной конвертации:")
+            print("   1. Установите Docker: https://docs.docker.com/get-docker/")
+            print(
+                "   2. Запустите: docker run --rm -v $(pwd):/data minlag/mermaid-cli -i /data/input.mmd -o /data/output.svg")
+            print("   3. Или установите mermaid-cli: npm install -g @mermaid-js/mermaid-cli")
+            print("   4. Запустите: npx mmdc -i input.mmd -o output.svg")
+
+            os.unlink(mermaid_file)
+            return False
+
+        except Exception as e:
+            print(f"❌ Неожиданная ошибка при создании SVG: {e}")
+            # Сохраняем Mermaid код как запасной вариант
+            mermaid_output = output_file.replace('.svg', '.mmd')
+            with open(mermaid_output, 'w', encoding='utf-8') as f:
+                f.write(mermaid_code)
+            print(f"✅ Mermaid код сохранен в: {mermaid_output}")
+            return False
+
+    def compare_with_npm(self, package_name, our_graph):
+        """Сравнение с выводом штатных инструментов npm"""
+        print(f"\n🔍 Сравнение с npm для пакета '{package_name}':")
+
+        try:
+            # Получаем зависимости через npm (только прямые)
+            npm_dependencies = self.get_direct_dependencies(package_name, "https://registry.npmjs.org", False)
+            npm_dep_names = set(npm_dependencies.keys())
+
+            # Наши прямые зависимости
+            our_direct_deps = set(our_graph.get(package_name, []))
+
+            print("   Прямые зависимости:")
+            print(f"   - npm: {len(npm_dep_names)} пакетов")
+            print(f"   - Наш инструмент: {len(our_direct_deps)} пакетов")
+
+            # Находим различия
+            only_in_npm = npm_dep_names - our_direct_deps
+            only_in_our = our_direct_deps - npm_dep_names
+
+            if only_in_npm:
+                print(f"   ❌ Только в npm: {list(only_in_npm)}")
+            if only_in_our:
+                print(f"   ❌ Только в нашем инструменте: {list(only_in_our)}")
+
+            if not only_in_npm and not only_in_our:
+                print("   ✅ Прямые зависимости совпадают")
+
+            # Объяснение возможных расхождений
+            if only_in_npm or only_in_our:
+                print("\n   📝 Возможные причины расхождений:")
+                print("   - Разные версии пакетов")
+                print("   - npm учитывает peerDependencies и devDependencies")
+                print("   - Кэширование данных в npm registry")
+                print("   - Временные сетевые проблемы")
+                print("   - Разная логика обработки опциональных зависимостей")
+
+        except Exception as e:
+            print(f"   ⚠️ Не удалось выполнить сравнение: {e}")
+
     def print_dependency_graph(self, graph, start_package):
         """Вывод графа зависимостей"""
         if not graph:
@@ -369,7 +531,7 @@ class DependencyVisualizer:
             print("=" * 60)
 
             if args.reverse:
-                # Режим обратных зависимостей (только для этого этапа)
+                # Режим обратных зависимостей
                 reverse_deps = self.find_reverse_dependencies(
                     args.package,
                     args.repo,
@@ -405,6 +567,22 @@ class DependencyVisualizer:
                 # Вывод полного графа зависимостей
                 self.print_dependency_graph(dependency_graph, args.package)
 
+                # Генерация Mermaid диаграммы
+                print(f"\n📊 Генерация визуализации...")
+                mermaid_code = self.generate_mermaid_diagram(dependency_graph, args.package)
+
+                print("📝 Mermaid код:")
+                print("-" * 40)
+                print(mermaid_code)
+                print("-" * 40)
+
+                # Сохранение SVG
+                svg_generated = self.save_svg_from_mermaid(mermaid_code, args.output)
+
+                # Сравнение с npm (только в реальном режиме)
+                if not args.test_mode and not args.filter and svg_generated:
+                    self.compare_with_npm(args.package, dependency_graph)
+
                 # Статистика
                 total_packages = len(dependency_graph)
                 packages_with_deps = sum(1 for deps in dependency_graph.values() if deps)
@@ -414,7 +592,7 @@ class DependencyVisualizer:
                 print(f"   Пакетов с зависимостями: {packages_with_deps}")
                 print(f"   Циклических зависимостей: {len(cycles)}")
 
-            print(f"\n✅ Этап 4 успешно завершен.")
+            print(f"\n✅ Этап 5 успешно завершен.")
 
         except Exception as e:
             print(f"❌ Ошибка: {e}")
